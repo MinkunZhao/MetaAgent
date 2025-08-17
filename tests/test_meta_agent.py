@@ -13,7 +13,7 @@ pytestmark = pytest.mark.asyncio
 def mock_config():
     """提供一个模拟的配置字典"""
     return {
-        "openai_api_key": "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",
+        "openai_api_key": "",
         "default_model": "gpt-4.1-mini",
         "log_level": "info",
         "max_tokens_per_request": 256,
