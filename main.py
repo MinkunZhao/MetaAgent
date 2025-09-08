@@ -9,6 +9,7 @@ from utils.api_utils import ApiManager
 from evaluation.human_eval import HumanEvalRunner
 from evaluation.gsm8k import Gsm8kRunner
 from evaluation.hardmath import HardMathRunner
+from evaluation.aime import AimeRunner
 
 
 async def main():
@@ -20,7 +21,8 @@ async def main():
     parser.add_argument("--eval-humaneval", action="store_true", help="Run evaluation on HumanEval dataset")
     # 新增GSM8K评估参数
     parser.add_argument("--eval-gsm8k", action="store_true", help="Run evaluation on GSM8K dataset")
-    parser.add_argument("--eval-hardmath", default=1, action="store_true", help="Run evaluation on HARDMath dataset with evolution and testing phases")
+    parser.add_argument("--eval-hardmath", action="store_true", help="Run evaluation on HARDMath dataset with evolution and testing phases")
+    parser.add_argument("--eval-aime", default=1, action="store_true", help="Run evaluation on AIME 2025 dataset")
     parser.add_argument("--output", type=str, default="results", help="Output directory for results")
     # parser.add_argument("--eval", dest='eval_humaneval', action="store_true", help="DEPRECATED: Use --eval-humaneval")
     args = parser.parse_args()
@@ -31,20 +33,20 @@ async def main():
             config = json.load(f)
     else:
         # config = {
-        #     "openai_api_key": "",
-        #     "default_model": "gpt-4.1-mini",
+        #     "openai_api_key": "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",
+        #     "default_model": "gpt-5-nano",
         #     "log_level": "info",
-        #     "max_tokens_per_request": 256,
-        #     "temperature": 0.5
+        #     # "max_tokens_per_request": 1024,
+        #     "temperature": 0.7
         # }
 
         config = {
-            "yibu_api_key": "",
+            "yibu_api_key": "sk-MH4VFDsEgTh1doboUDWp26WWWBFHwXZuR2yBwBInpWbnJbPt",
             "yibu_base_url": "https://yibuapi.com",
-            "default_model": "claude-3-7-sonnet-latest",
-            "timeout": 60,
-            "max_tokens": 1024,
-            "temperature": 0.5
+            "default_model": "claude-4-sonnet",
+            "timeout": 120,
+            "max_tokens": 2048,
+            "temperature": 0.7
         }
 
         os.makedirs(os.path.dirname(args.config), exist_ok=True)
@@ -93,8 +95,7 @@ async def main():
         runner = HardMathRunner(meta_agent, config)
 
         # 1. 进化阶段
-        # 使用前5个训练问题进行进化 (可根据需要调整数量)
-        await runner.run_evolution_phase(num_problems=5)
+        # await runner.run_evolution_phase(num_problems=5)
 
         # 2. 测试阶段
         results = await runner.run_testing_phase()
@@ -109,6 +110,19 @@ async def main():
             print(f"Accuracy: {results.get('accuracy', 0):.2f}")
         else:
             print("HARDMath evaluation did not produce any results.")
+
+    elif args.eval_aime:
+        print("Running AIME 2025 evaluation...")
+        runner = AimeRunner(meta_agent, config)
+        results = await runner.run_testing_phase()
+        if results:
+            output_path = os.path.join(args.output, "aime2025_results.json")
+            with open(output_path, "w") as f:
+                json.dump(results, f, indent=2)
+            print(f"AIME 2025 evaluation results saved to {output_path}")
+            print(f"Accuracy: {results.get('accuracy', 0):.2f}")
+        else:
+            print("AIME 2025 evaluation did not produce any results.")
 
     elif args.task:
         # 执行单个任务
