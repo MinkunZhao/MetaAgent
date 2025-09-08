@@ -1,8 +1,8 @@
 {
-  "yibu_api_key": "",
-  "yibu_base_url": "https://yibuapi.com",
-  "default_model": "claude-3-7-sonnet-latest",
-  "timeout": 60,
-  "max_tokens": 1024,
-  "temperature": 0.5
+            "yibu_api_key": "sk-MH4VFDsEgTh1doboUDWp26WWWBFHwXZuR2yBwBInpWbnJbPt",
+            "yibu_base_url": "https://yibuapi.com",
+            "default_model": "claude-4-sonnet",
+            "timeout": 120,
+            "max_tokens": 2048,
+            "temperature": 0.7
 }

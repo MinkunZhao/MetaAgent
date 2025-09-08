@@ -70,8 +70,8 @@ class Gsm8kRunner:
         """评估单个问题"""
         task = f"Please solve the following math word problem. Show your reasoning step-by-step and provide the final answer at the end in the format #### <answer>.\n\nQuestion: {problem['question']}"
 
-        result = await self.meta_agent.handle_task(task)
-        generated_text = result["output"]
+        result_obj = await self.meta_agent.handle_task(task)
+        generated_text = result_obj.get("output", "")
 
         generated_answer = self._extract_final_answer(generated_text)
         correct_answer = self._extract_final_answer(problem['answer'])

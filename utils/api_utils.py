@@ -1,9 +1,19 @@
-'''# utils/api_utils.py
-import os
+# utils/api_utils.py
+'''import os
 import json
 import asyncio
 from typing import Dict, Any, List, Optional
 import openai
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
+
+# 定义一个重试装饰器，专门用于处理临时的API错误
+# 这会使得函数在遇到指定的openai错误时自动重试
+# 等待策略是指数退避，最短1秒，最长60秒，总共尝试6次
+retry_on_api_error = retry(
+    wait=wait_random_exponential(min=1, max=60),
+    stop=stop_after_attempt(6),
+    retry=retry_if_exception_type((openai.APIConnectionError, openai.RateLimitError, openai.APITimeoutError))
+)
 
 
 class ApiManager:
@@ -16,13 +26,19 @@ class ApiManager:
         self.config = config
         self.api_key = os.environ.get("OPENAI_API_KEY", config.get("openai_api_key", ""))
         self.default_model = config.get("default_model", "")
+
+        if not self.api_key:
+            raise ValueError(
+                "OpenAI API key not found. Please set the OPENAI_API_KEY environment variable or add it to the config.")
+
         self.client = openai.AsyncOpenAI(api_key=self.api_key)
 
+    @retry_on_api_error
     async def generate_completion(self,
                                   prompt: str,
                                   model: Optional[str] = None,
                                   temperature: float = 0.7,
-                                  max_completion_tokens: int = 2048) -> str:
+                                  ) -> str:
         """生成文本完成"""
         model = model or self.default_model
 
@@ -33,18 +49,23 @@ class ApiManager:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=temperature,
-                max_tokens=max_completion_tokens
             )
             return response.choices[0].message.content
-        except Exception as e:
-            print(f"API error: {e}")
+        except openai.APIError as e:
+            # 处理非瞬时性的API错误（例如，无效请求）
+            print(f"A non-retriable API error occurred: {e}")
             return f"Error generating completion: {str(e)}"
+        except Exception as e:
+            # 处理其他未知错误
+            print(f"An unexpected error occurred: {e}")
+            return f"An unexpected error occurred while generating completion: {str(e)}"
 
+    @retry_on_api_error
     async def generate_chat_completion(self,
                                        messages: List[Dict[str, str]],
                                        model: Optional[str] = None,
                                        temperature: float = 1,
-                                       max_completion_tokens: int = 2048) -> str:
+                                       ) -> str:
         """生成聊天完成"""
         model = model or self.default_model
 
@@ -53,24 +74,55 @@ class ApiManager:
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=max_completion_tokens
             )
             return response.choices[0].message.content
-        except Exception as e:
-            print(f"API error: {e}")
+        except openai.APIError as e:
+            # 处理非瞬时性的API错误
+            print(f"A non-retriable API error occurred: {e}")
             return f"Error generating chat completion: {str(e)}"
+        except Exception as e:
+            # 处理其他未知错误
+            print(f"An unexpected error occurred: {e}")
+            return f"An unexpected error occurred while generating chat completion: {str(e)}"
 
     async def batch_generate(self,
                              prompts: List[str],
                              model: Optional[str] = None,
                              temperature: float = 1,
-                             max_tokens: int = 2048) -> List[str]:
-        """批量生成完成"""
+                             ) -> List[str]:
+        """
+        批量生成完成
+        注意：asyncio.gather会并发执行任务。如果请求量非常大，
+        可能会瞬间达到速率限制。可以考虑使用信号量（Semaphore）来控制并发数。
+        """
+        # 使用Semaphore来限制同时进行的API调用数量，防止速率超限
+        # 例如，我们限制最多同时有10个并发请求
+        sem = asyncio.Semaphore(10)
+
+        async def controlled_generation(prompt: str) -> str:
+            async with sem:
+                # 在进入信号量控制的区域后，可以稍微等待一下，进一步平滑请求
+                await asyncio.sleep(0.5)
+                return await self.generate_completion(prompt, model, temperature)
+
         tasks = [
-            self.generate_completion(prompt, model, temperature, max_tokens)
+            controlled_generation(prompt)
             for prompt in prompts
         ]
-        return await asyncio.gather(*tasks)'''
+
+        # gather会等待所有任务完成
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 处理可能在gather中捕获的异常
+        final_results = []
+        for res in results:
+            if isinstance(res, Exception):
+                print(f"A task in batch failed after all retries: {res}")
+                final_results.append(f"Error: {str(res)}")
+            else:
+                final_results.append(res)
+
+        return final_results'''
 
 
 

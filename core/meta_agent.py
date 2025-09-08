@@ -2,16 +2,14 @@
 from typing import List, Dict, Any
 import os
 import json
-# from mcp_agent.agents.agent import Agent
-from agents.base_agent import Agent  # 更新导入路径
+from agents.base_agent import Agent
 from .agent_factory import AgentFactory
 from .collaboration import CollaborationManager
 from .evolution_engine import EvolutionEngine
 from utils.prompt_utils import load_prompt_template
 from utils.json_utils import extract_and_parse_json
-from memory.knowledge_base import KnowledgeBase
-from memory.experience_store import ExperienceStore
-
+# from memory.knowledge_base import KnowledgeBase
+# from memory.experience_store import ExperienceStore
 
 
 class MetaAgent(Agent):
@@ -24,52 +22,52 @@ class MetaAgent(Agent):
         super().__init__(
             name="MetaAgent",
             system_prompt=load_prompt_template("meta_agent_system"),
-            config=config  # 添加配置传递
+            config=config
         )
-        # super().__init__(
-        #     name="MetaAgent",
-        #     system_prompt=load_prompt_template("meta_agent_system")
-        # )
         self.config = config
         self.agent_factory = AgentFactory(config)
         self.collaboration_manager = CollaborationManager()
         self.evolution_engine = EvolutionEngine(config, self.agent_factory)
-        self.knowledge_base = KnowledgeBase()
-        self.experience_store = ExperienceStore()
+        # self.knowledge_base = KnowledgeBase()
+        # self.experience_store = ExperienceStore()
         self.task_counter = 0
+
+    # NEW METHOD: A dedicated internal generator for structured JSON output
+    async def _generate_structured_json(self, prompt: str) -> Any:
+        """
+        一个专用于生成纯JSON输出的内部方法，不触发自我评估。
+        """
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": prompt}
+        ]
+        # Directly call the api_manager for a clean response
+        response_text = await self.api_manager.generate_chat_completion(messages)
+        return extract_and_parse_json(response_text)
 
     async def handle_task(self, task_description: str, allow_evolution: bool = True) -> Dict[str, Any]:
         """
         处理用户任务
-
-        Args:
-            task_description: 任务的描述
-            allow_evolution: 是否允许在该任务后触发进化机制
         """
         self.task_counter += 1
 
-        # 1. 分析任务
         print("\n--- [MetaAgent] Analyzing Task ---")
         task_analysis = await self._analyze_task(task_description)
         print(json.dumps(task_analysis, indent=2, ensure_ascii=False))
 
-        # 2. 确定所需的Agent类型和数量
         print("\n--- [MetaAgent] Determining Required Agents ---")
         required_agents = await self._determine_required_agents(task_analysis)
         print(json.dumps(required_agents, indent=2, ensure_ascii=False))
 
-        # 3. 生成或检索Agent
         agents = await self.agent_factory.create_agents(required_agents)
         print("\n--- [MetaAgent] Created Sub-Agents ---")
         for agent in agents:
             print(f"- Name: {agent.name}, Type: {agent.type}, Role: {agent.role}")
 
-        # 4. 设计协作流程
         print("\n--- [MetaAgent] Designing Collaboration Plan ---")
         collaboration_plan = await self._design_collaboration(task_analysis, agents)
         print(json.dumps(collaboration_plan, indent=2, ensure_ascii=False))
 
-        # 5. 执行协作流程
         print("\n--- [MetaAgent] Starting Collaboration ---")
         result = await self.collaboration_manager.execute_plan(
             collaboration_plan,
@@ -77,13 +75,10 @@ class MetaAgent(Agent):
             task_description
         )
 
-        # 6. 评估结果
         evaluation = await self._evaluate_result(result, task_description)
 
-        # 7. 更新经验和知识
-        await self._update_experience(task_analysis, agents, result, evaluation)
+        # await self._update_experience(task_analysis, agents, result, evaluation)
 
-        # 8. 触发自我进化（如果需要且被允许）
         if allow_evolution:
             if evaluation.get('should_evolve', False):
                 print("\n--- [MetaAgent] Triggering Intra-task Self-Evolution ---")
@@ -93,136 +88,115 @@ class MetaAgent(Agent):
                     evaluation
                 )
 
-            # 每隔5个任务，触发一次基于经验库的宏观进化
-            if self.task_counter % 5 == 0:
-                print("\n--- [MetaAgent] Triggering Inter-task (Experience-based) Self-Evolution ---")
-                await self.evolution_engine.evolve_from_experience_store()
+            # if self.task_counter % 5 == 0:
+            #     print("\n--- [MetaAgent] Triggering Inter-task (Experience-based) Self-Evolution ---")
+            #     await self.evolution_engine.evolve_from_experience_store()
 
         return result
 
     async def _analyze_task(self, task_description: str) -> Dict[str, Any]:
-        """分析任务，确定任务类型、难度和关键要求"""
+        """分析任务"""
         prompt = load_prompt_template("task_analysis").format(
             task_description=task_description
         )
-        response = await self.generate(prompt)
-        # try:
-        #     return json.loads(response)
-        # except:
-        #     # 如果返回的不是有效的JSON，进行后处理
-        #     return {
-        #         "task_type": "unknown",
-        #         "complexity": "medium",
-        #         "key_requirements": ["complete the task"],
-        #         "suggested_approach": "general problem solving"
-        #     }
-        parsed_json = extract_and_parse_json(response)
+        parsed_json = await self._generate_structured_json(prompt)
+
         if parsed_json:
             return parsed_json
-        print("警告: 任务分析未能解析JSON，使用默认值。")
+
+        print("警告: 任务分析未能解析JSON，使用智能回退机制。")
+        # 更智能的回退
+        desc_lower = task_description.lower()
+        math_keywords = ["math", "aime", "geometry", "algebra", "combinatorics", "number theory", "calculate",
+                         "find the value"]
+        if any(keyword in desc_lower for keyword in math_keywords):
+            print("  检测到数学相关关键词，回退到高复杂度数学任务类型。")
+            return {
+                "task_type": "high_complexity_math", "complexity": "high",
+                "key_requirements": ["solve the math problem accurately", "provide step-by-step reasoning"],
+                "suggested_approach": "Use specialized math agents and review the solution."
+            }
         return {
-            "task_type": "unknown",
-            "complexity": "medium",
+            "task_type": "unknown", "complexity": "medium",
             "key_requirements": ["complete the task"],
             "suggested_approach": "general problem solving"
         }
 
     async def _determine_required_agents(self, task_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         """根据任务分析确定需要哪些Agent"""
-        task_type = task_analysis.get("task_type", "unknown")
-        if "math" in task_type.lower() and task_analysis.get("complexity") == "high":
-            print("检测到高难度数学任务，使用专门的hard_math_agent。")
+        task_type = task_analysis.get("task_type", "").lower()
+        complexity = task_analysis.get("complexity", "")
+
+        # MODIFIED: More robust check for math-related tasks
+        math_related_keywords = ["math", "combinatorics", "geometry", "algebra"]
+        is_math_task = any(keyword in task_type for keyword in math_related_keywords)
+
+        if is_math_task and complexity == "high":
+            print("检测到高难度数学任务，使用专门的hard_math_agent和math_reviewer。")
             return [
-                {"type": "planner", "name": "MathPlannerAgent", "role": "Plan the mathematical solving steps"},
-                {"type": "hard_math_agent", "name": "HardMathSolverAgent",
-                 "role": "Execute the plan to solve the complex math problem"},
-                {"type": "reviewer", "name": "MathReviewerAgent",
-                 "role": "Review the mathematical solution and final answer for correctness"}
+                {
+                    "type": "hard_math_agent",
+                    "name": "HardMathSolverAgent",
+                    "role": "Execute the plan to solve the complex math problem",
+                    "custom_prompt": self.agent_factory.agent_templates.get("hard_math_agent", {}).get("system_prompt")
+                },
+                {
+                    # MODIFIED: Use the correct math_reviewer
+                    "type": "math_reviewer",
+                    "name": "MathReviewerAgent",
+                    "role": "Review the mathematical solution and final answer for correctness",
+                    "custom_prompt": self.agent_factory.agent_templates.get("math_reviewer", {}).get("system_prompt")
+                }
             ]
+
         prompt = load_prompt_template("determine_agents").format(
             task_analysis=json.dumps(task_analysis, indent=2)
         )
-        response = await self.generate(prompt)
-        # try:
-        #     return json.loads(response)
-        # except:
-        #     # 默认返回
-        #     return [
-        #         {"type": "planner", "role": "Plan the approach"},
-        #         {"type": "executor", "role": "Execute the plan"},
-        #         # {"type": "reviewer", "role": "Review the result"}
-        #     ]
-        parsed_json = extract_and_parse_json(response)
+        parsed_json = await self._generate_structured_json(prompt)
         if parsed_json:
             return parsed_json
         print("警告: 代理决策未能解析JSON，使用默认值。")
         return [
-            {"type": "planner", "name": "PlannerAgent", "role": "Plan the approach"},
-            {"type": "executor", "name": "ExecutorAgent", "role": "Execute the plan"}
+            {"type": "planner", "name": "PlannerAgent", "role": "Plan the approach",
+             "custom_prompt": "You are a planning agent."},
+            {"type": "executor", "name": "ExecutorAgent", "role": "Execute the plan",
+             "custom_prompt": "You are an execution agent."}
         ]
 
     async def _design_collaboration(self,
                                     task_analysis: Dict[str, Any],
                                     agents: List[Agent]) -> Dict[str, Any]:
-        """设计Agent之间的协作流程"""
-        agent_info = [{"name": agent.name, "role": agent.role} for agent in agents]
+        """设计协作流程"""
+        agent_info = [{"name": agent.name, "role": agent.role, "type": agent.type} for agent in agents]
+
+        # If there's no planner, the first agent should directly execute.
+        has_planner = any(a.type == 'planner' for a in agents)
+        is_math_task = "math" in task_analysis.get("task_type", "")
+
+        # For high-complexity math, a direct execution is better than a generic plan.
+        if not has_planner or is_math_task:
+            executor = next((a.name for a in agents if a.type in ['hard_math_agent', 'executor']), agents[0].name)
+            return {"steps": [{"agent": executor, "action": "execute", "input": "task_description"}],
+                    "final_output": "last_output"}
+
         prompt = load_prompt_template("design_collaboration").format(
             task_analysis=json.dumps(task_analysis, indent=2),
             agents=json.dumps(agent_info, indent=2)
         )
-        response = await self.generate(prompt)
-        '''try:
-            return json.loads(response)
-        # except:
-        #     # 默认协作流程
-        #     return {
-        #         "steps": [
-        #             {"agent": agents[0].name, "action": "plan", "input": "task_description"},
-        #             {"agent": agents[1].name, "action": "execute", "input": "previous_output"},
-        #             # {"agent": agents[2].name, "action": "review", "input": "previous_output"}
-        #         ],
-        #         "final_output": "last_output"
-        #     }
-        except:
-            # 默认协作流程
-            agent_names = [agent.name for agent in agents]
-            if len(agent_names) >= 2:
-                return {
-                    "steps": [
-                        {"agent": agent_names[0], "action": "plan", "input": "task_description"},
-                        {"agent": agent_names[1], "action": "execute", "input": "previous_output"},
-                    ],
-                    "final_output": "last_output"
-                }
-            else:
-                return {
-                    "steps": [
-                        {"agent": agent_names[0], "action": "generate", "input": "task_description"},
-                    ],
-                    "final_output": "last_output"
-                }'''
-        parsed_json = extract_and_parse_json(response)
+        # MODIFIED: Use the new internal generator
+        parsed_json = await self._generate_structured_json(prompt)
         if parsed_json:
             return parsed_json
         print("警告: 协作设计未能解析JSON，使用默认流程。")
-        agent_names = [agent.name for agent in agents]
-        if len(agent_names) >= 2:
-            return {
-                "steps": [
-                    {"agent": agent_names[0], "action": "plan", "input": "task_description"},
-                    {"agent": agent_names[1], "action": "execute", "input": "previous_output"},
-                ],
-                "final_output": "last_output"
-            }
-        elif agent_names:
-            return {
-                "steps": [
-                    {"agent": agent_names[0], "action": "generate", "input": "task_description"},
-                ],
-                "final_output": "last_output"
-            }
-        else:
-            return {"steps": [], "final_output": "none"}
+        planner = next((a.name for a in agents if a.type == 'planner'), agents[0].name)
+        executor = next((a.name for a in agents if a.type == 'executor'), agents[-1].name)
+        return {
+            "steps": [
+                {"agent": planner, "action": "plan", "input": "task_description"},
+                {"agent": executor, "action": "execute", "input": "previous_output"},
+            ],
+            "final_output": "last_output"
+        }
 
     async def _evaluate_result(self,
                                result: Dict[str, Any],
@@ -230,31 +204,18 @@ class MetaAgent(Agent):
         """评估任务结果"""
         prompt = load_prompt_template("evaluate_result").format(
             task_description=task_description,
-            result=json.dumps(result, indent=2)
+            result=json.dumps(result, indent=2, default=str)
         )
-        response = await self.generate(prompt)
-        # try:
-        #     evaluation = json.loads(response)
-        #     # 添加是否需要进化的标志
-        #     evaluation["should_evolve"] = evaluation.get("score", 0) < 0.7
-        #     return evaluation
-        # except:
-        #     return {
-        #         "score": 0.5,
-        #         "strengths": ["Completed the task"],
-        #         "weaknesses": ["Quality could be improved"],
-        #         "should_evolve": True
-        #     }
-        parsed_json = extract_and_parse_json(response)
-        if parsed_json:
+        # MODIFIED: Use the new internal generator
+        parsed_json = await self._generate_structured_json(prompt)
+        if parsed_json and isinstance(parsed_json, dict):
             evaluation = parsed_json
             evaluation["should_evolve"] = evaluation.get("score", 0) < 0.7
             return evaluation
         print("警告: 结果评估未能解析JSON，使用默认值。")
         return {
-            "score": 0.5,
-            "strengths": ["Completed the task"],
-            "weaknesses": ["Quality could be improved", "Evaluation response was not valid JSON."],
+            "score": 0.5, "strengths": [],
+            "weaknesses": ["Evaluation response was not valid JSON."],
             "should_evolve": True
         }
 
@@ -264,26 +225,11 @@ class MetaAgent(Agent):
                                  result: Dict[str, Any],
                                  evaluation: Dict[str, Any]) -> None:
         """更新经验库"""
-        agent_specs = []
-        for agent in agents:
-            agent_specs.append({
-                "name": agent.name,
-                "role": agent.role,
-                "type": agent.type,
-                "system_prompt": agent.system_prompt
-            })
-
+        agent_specs = [{"name": a.name, "type": a.type, "system_prompt": a.system_prompt} for a in agents]
         experience = {
             "task_analysis": task_analysis,
             "agents_used": agent_specs,
-            "result": result,
+            "result_trajectory": result,
             "evaluation": evaluation
         }
         await self.experience_store.store_experience(experience)
-
-        # 更新知识库
-        if evaluation.get("score", 0) > 0.8:
-            await self.knowledge_base.add_knowledge(
-                task_type=task_analysis.get("task_type", "unknown"),
-                knowledge=experience
-            )

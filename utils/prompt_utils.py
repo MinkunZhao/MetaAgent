@@ -4,27 +4,23 @@ from typing import Dict, Any
 
 _PROMPT_CACHE = {}
 
-
 def load_prompt_template(template_name: str) -> str:
     """
     加载提示模板
     """
     if template_name in _PROMPT_CACHE:
         return _PROMPT_CACHE[template_name]
-
-    # 简单的模板加载逻辑
     template = _DEFAULT_TEMPLATES.get(template_name, f"Template '{template_name}' not found.")
     _PROMPT_CACHE[template_name] = template
     return template
 
-
-# 默认模板
+# 默认模板 (已更新以支持新的进化机制)
 _DEFAULT_TEMPLATES = {
     "meta_agent_system": """You are MetaAgent, a sophisticated AI coordinator that can generate and manage specialized AI agents to solve complex tasks. Your responsibilities include:
 1. Analyzing user tasks to determine the most effective approach.
 2. Creating specialized agents with tailored prompts for specific sub-tasks.
-3. Coordinating collaboration between multiple agents, including iterative refinement loops, to solve problems.
-4. Evaluating results and improving the system through self-evolution based on both single-task performance and long-term experience synthesis.
+3. Coordinating collaboration between multiple agents. Your system dynamically triggers refinement loops based on agent confidence, ensuring quality.
+4. Evaluating results and improving the system through self-evolution based on performance, agent confidence scores, and refinement trajectories.
 Your goal is to harness the collective intelligence of multiple specialized agents to achieve superior results.
 """,
 
@@ -47,8 +43,7 @@ Provide your analysis in JSON format with the following fields:
 
 TASK ANALYSIS: {task_analysis}
 
-For each required agent, specify its type, role, and a tailored system prompt.
-IMPORTANT: For 'high' complexity tasks, always include a 'reviewer' agent to enable a refinement loop. For simpler tasks, a 'planner' and 'executor' is often sufficient.
+For 'high' complexity tasks, you MUST include a 'reviewer' agent to enable self-correction loops. For simpler tasks, a 'planner' and 'executor' is often sufficient.
 
 CRITICAL: Return your response as a valid JSON array of agent specifications. The response must start with `[` and end with `]`.
 Each object must have these keys:
@@ -63,13 +58,13 @@ Each object must have these keys:
 TASK ANALYSIS: {task_analysis}
 AVAILABLE AGENTS: {agents}
 
-Create a step-by-step collaboration plan. If a 'reviewer' agent is present, you MUST include a 'review_and_refine' action step after the main execution step. This enables a self-correction loop.
+Create a step-by-step collaboration plan. Your plan should be logical, starting with planning and moving to execution. You DO NOT need to add a 'review' step, as the system will trigger it automatically if an agent's confidence is low.
 
 CRITICAL: Return your response as a single, valid JSON object.
 The JSON object must have these keys:
 - steps: An array of steps, each with:
   - agent: The name of the agent responsible.
-  - action: What the agent should do (e.g., "plan", "execute", "review_and_refine").
+  - action: What the agent should do (e.g., "plan", "execute", "code").
   - input: Where the input comes from (e.g., "task_description", "previous_output").
 - final_output: Which step's output is the final result (usually "last_output").
 """,
@@ -83,51 +78,51 @@ Provide a comprehensive evaluation.
 
 CRITICAL: Return your evaluation as a single, valid JSON object.
 The JSON object must have these keys:
-- score: A numeric rating from 0.0 to 1.0.
+- score: A numeric rating from 0.0 (failure) to 1.0 (perfect).
 - strengths: An array of identified strengths.
 - weaknesses: An array of identified weaknesses.
-- improvement_suggestions: Specific suggestions for improvement.
+- improvement_suggestions: Specific suggestions for what could have been done better.
 """,
 
-    "identify_improvements": """Analyze the following task execution and identify areas for system improvement.
+    "identify_improvements": """Analyze the following task execution trajectory and identify areas for system improvement. The goal is to propose a single, high-impact change to an agent's core instructions (system prompt) to prevent similar failures or low-confidence outputs in the future.
 
 TASK ANALYSIS: {task_analysis}
-EXECUTION RESULT: {result}
-EVALUATION: {evaluation}
+EXECUTION TRAJECTORY: {result_trajectory}
+FINAL EVALUATION: {evaluation}
 
-Based on the weaknesses and evaluation score, suggest ONE specific, high-impact improvement.
+Focus on the steps with low confidence or where refinement was needed. What was the root cause of the agent's uncertainty or error? Based on this, suggest a specific improvement.
 
 CRITICAL: Return a valid JSON array containing a SINGLE improvement object.
 The object must have these keys:
-- type: The type of improvement (e.g., "agent_template").
-- specific_element_to_improve": The name of the item to improve (e.g., agent type like "hard_math_agent" or "code_generator").
-- suggestions: An array of specific improvement suggestions for the element's system prompt.
+- type: Must be "agent_template".
+- specific_element_to_improve": The type of the agent that needs improvement (e.g., "hard_math_agent", "executor").
+- suggestions: An array of specific, actionable suggestions to add to the agent's system prompt to address the root cause. (e.g., "Add a directive to always double-check calculations before finalizing the answer.").
 """,
 
     "improve_agent_template": """Improve the following agent template based on analysis of its performance.
 
 AGENT TYPE: {agent_type}
 CURRENT TEMPLATE: {current_template}
-CONTEXT: {context_info}
+PERFORMANCE CONTEXT: {context_info}
 IMPROVEMENT SUGGESTIONS: {suggestions}
 
-Create an improved template that addresses the identified issues. Incorporate the suggestions into the new system prompt to make it more robust, knowledgeable, and effective.
+Your task is to rewrite the `system_prompt` for this agent. The new prompt must be a strict improvement. It should integrate the `suggestions` and address the failures or uncertainties described in the `context_info`. Make the agent's instructions more robust, precise, and better equipped to handle similar tasks in the future.
 
-CRITICAL: Return a single, valid JSON object representing the improved agent template, containing only the "system_prompt" key and its new value.
+CRITICAL: Return a single, valid JSON object representing the improved agent template, containing only the "system_prompt" key and its new, complete string value.
 """,
 
-    "synthesize_experiences": """You are a meta-analyst for an AI agent system. Analyze the following recent experiences (task analysis, agents used, and evaluation scores) to identify overarching patterns and suggest a single, high-impact evolution for an agent template.
+    "synthesize_experiences": """You are a meta-analyst for an AI agent system. Analyze the following recent experiences (each including task type, agent trajectory with confidence scores, and final evaluation) to identify a systemic, recurring weakness.
 
 RECENT EXPERIENCES:
 {experiences_json}
 
-Your goal is to move beyond single-task failures and find systemic weaknesses. For example, if multiple math tasks fail due to calculation errors, suggest improving the 'hard_math_agent' prompt to emphasize double-checking work.
+Your goal is to find a pattern. For instance, does the 'hard_math_agent' consistently express low confidence on algebra problems? Does the 'executor' agent often fail to follow complex plans? Based on the most critical recurring pattern, propose a single, high-impact evolution for the responsible agent's template.
 
 CRITICAL: Return a valid JSON array containing a SINGLE improvement plan object.
 The object must have these keys:
 - type: Must be "agent_template".
-- specific_element_to_improve": The agent type that needs the most critical update (e.g., "hard_math_agent", "code_generator").
-- reasoning": A brief explanation of why this agent needs evolution based on the data.
-- suggestions": An array of concrete suggestions for improving its system prompt.
+- specific_element_to_improve": The agent type that needs the most critical update (e.g., "hard_math_agent").
+- reasoning": A brief explanation of the systemic weakness you identified from the data.
+- suggestions": An array of concrete suggestions for improving its system prompt to fix this systemic issue.
 """
 }

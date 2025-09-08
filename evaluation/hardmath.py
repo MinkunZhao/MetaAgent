@@ -106,7 +106,7 @@ class HardMathRunner:
         task = f"Please solve the following advanced math problem from the HARDMath dataset. Provide a detailed, step-by-step reasoning and enclose your final answer in \\boxed{{...}}.\n\nQuestion: {problem['question']}"
 
         result_obj = await self.meta_agent.handle_task(task, allow_evolution=allow_evolution)
-        generated_text = result_obj["output"]
+        generated_text = result_obj.get("output", "") # MODIFIED HERE
 
         generated_answer = self._extract_final_answer(generated_text)
         correct_answer = problem.get('answer_val', '')

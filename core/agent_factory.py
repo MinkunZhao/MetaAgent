@@ -9,6 +9,7 @@ from agents.specialized.code_agent import CodeAgent
 from agents.specialized.review_agent import ReviewAgent
 from agents.specialized.test_agent import TestAgent
 from utils.json_utils import extract_and_parse_json
+from agents.specialized.math_agent import MathAgent
 
 
 class AgentFactory:
@@ -26,7 +27,7 @@ class AgentFactory:
         """加载Agent模板"""
         templates_path = os.path.join("config", "agent_templates.json")
         if os.path.exists(templates_path):
-            with open(templates_path, "r") as f:
+            with open(templates_path, "r", encoding="utf-8") as f:
                 self.agent_templates = json.load(f)
         else:
             # 默认模板
@@ -54,17 +55,6 @@ class AgentFactory:
     async def create_agents(self, agent_specs: List[Dict[str, Any]]) -> List[Agent]:
         """
         根据规格创建一组Agent
-
-        agent_specs格式:
-        [
-            {
-                "type": "code_generator",
-                "name": "Python Code Generator",
-                "role": "Generate Python code that solves the problem",
-                "custom_prompt": "Optional custom prompt override"
-            },
-            ...
-        ]
         """
         agents = []
         if not isinstance(agent_specs, list):
@@ -73,13 +63,9 @@ class AgentFactory:
 
         for spec in agent_specs:
             agent_type = spec.get("type", "generic")
-
-            # 获取基础模板
             template = self.agent_templates.get(agent_type, {
                 "system_prompt": "You are a helpful assistant agent."
             })
-
-            # 使用自定义提示覆盖模板（如果提供）
             system_prompt = spec.get("custom_prompt", template["system_prompt"])
 
             # 根据type实例化专门化Agent
@@ -89,7 +75,8 @@ class AgentFactory:
                     system_prompt=system_prompt,
                     config=self.config
                 )
-            elif agent_type in ["reviewer", "code_reviewer", "review_agent"]:
+            # MODIFIED: Route new math_reviewer here
+            elif agent_type in ["reviewer", "code_reviewer", "math_reviewer"]:
                 agent = ReviewAgent(
                     name=spec.get("name", f"{agent_type.capitalize()}Agent"),
                     system_prompt=system_prompt,
@@ -101,6 +88,13 @@ class AgentFactory:
                     system_prompt=system_prompt,
                     config=self.config
                 )
+            # MODIFIED: Add hard_math_agent specialization
+            elif agent_type == "hard_math_agent":
+                agent = MathAgent(
+                    name=spec.get("name", "HardMathAgent"),
+                    system_prompt=system_prompt,
+                    config=self.config
+                )
             else:
                 agent = Agent(
                     name=spec.get("name", f"{agent_type.capitalize()}Agent"),
@@ -108,7 +102,6 @@ class AgentFactory:
                     config=self.config
                 )
 
-            # 添加额外属性
             agent.role = spec.get("role", f"Act as a {agent_type}")
             agent.type = agent_type
             agents.append(agent)
@@ -165,5 +158,5 @@ class AgentFactory:
         templates_path = os.path.join("config", "agent_templates.json")
         os.makedirs(os.path.dirname(templates_path), exist_ok=True)
 
-        with open(templates_path, "w") as f:
+        with open(templates_path, "w", encoding="utf-8") as f:
             json.dump(self.agent_templates, f, indent=2)
