@@ -1,15 +1,13 @@
 # core/meta_agent.py
-from typing import List, Dict, Any
-import os
 import json
+import re
+from typing import List, Dict, Any, Optional
 from agents.base_agent import Agent
 from .agent_factory import AgentFactory
 from .collaboration import CollaborationManager
 from .evolution_engine import EvolutionEngine
+from memory.experience_hub import ExperienceHub
 from utils.prompt_utils import load_prompt_template
-from utils.json_utils import extract_and_parse_json
-# from memory.knowledge_base import KnowledgeBase
-# from memory.experience_store import ExperienceStore
 
 
 class MetaAgent(Agent):
@@ -22,35 +20,52 @@ class MetaAgent(Agent):
             system_prompt=load_prompt_template("meta_agent_system"),
             config=config
         )
-        self.config = config
+        # self.config = config
         self.agent_factory = AgentFactory(config)
         self.collaboration_manager = CollaborationManager()
         self.evolution_engine = EvolutionEngine(config, self.agent_factory)
         # self.knowledge_base = KnowledgeBase()
         # self.experience_store = ExperienceStore()
-        self.task_counter = 0
+        self.experience_hub = ExperienceHub()
+        # self.task_counter = 0
 
     async def _generate_structured_json(self, prompt: str) -> Any:
         """
         一个专用于生成纯JSON输出的内部方法，不触发自我评估。
         """
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": prompt}
-        ]
+        response_text = await Agent(name="JsonGenerator", system_prompt=self.system_prompt,
+                                    config=self.config).generate(prompt)
+        # 简单的json提取，因为base_agent现在返回纯文本
+        match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if not match:
+            match = re.search(r'\[.*\]', response_text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        print(f"警告: 无法从响应中解析JSON: {response_text[:500]}")
+        return None
 
-        response_text = await self.api_manager.generate_chat_completion(messages)
-        return extract_and_parse_json(response_text)
-
-    async def handle_task(self, task_description: str, allow_evolution: bool = True) -> Dict[str, Any]:
-        self.task_counter += 1
-
+    async def handle_task(self, task_description: str, allow_evolution: bool = False) -> Dict[str, Any]:
+        # self.task_counter += 1
+        is_learning_task = "### Root Cause Analysis of the Error" in task_description
         print("\n--- [MetaAgent] Analyzing Task ---")
         task_analysis = await self._analyze_task(task_description)
         print(json.dumps(task_analysis, indent=2, ensure_ascii=False))
 
+        # 只有在非学习任务时才检索经验
+        retrieved_experience = None
+        if not is_learning_task:
+            print("\n--- [MetaAgent] Consulting Experience Hub ---")
+            retrieved_experience = self.experience_hub.retrieve_relevant_experience(task_analysis)
+        if retrieved_experience:
+            print("检索到成功的协作模式以指导规划。")
+        else:
+            print("未找到相关的过往经验，按标准流程分析。")
+
         print("\n--- [MetaAgent] Determining Required Agents ---")
-        required_agents = await self._determine_required_agents(task_analysis)
+        required_agents = await self._determine_required_agents(task_analysis, retrieved_experience)
         print(json.dumps(required_agents, indent=2, ensure_ascii=False))
 
         agents = await self.agent_factory.create_agents(required_agents)
@@ -59,7 +74,7 @@ class MetaAgent(Agent):
             print(f"- Name: {agent.name}, Type: {agent.type}, Role: {agent.role}")
 
         print("\n--- [MetaAgent] Designing Collaboration Plan ---")
-        collaboration_plan = await self._design_collaboration(task_analysis, agents)
+        collaboration_plan = await self._design_collaboration(task_analysis, agents, retrieved_experience)
         print(json.dumps(collaboration_plan, indent=2, ensure_ascii=False))
 
         print("\n--- [MetaAgent] Starting Collaboration ---")
@@ -69,29 +84,55 @@ class MetaAgent(Agent):
             task_description
         )
 
+        result['context']['collaboration_plan'] = collaboration_plan
+
         evaluation = await self._evaluate_result(result, task_description)
 
-        # await self._update_experience(task_analysis, agents, result, evaluation)
-
-        if allow_evolution:
-            if evaluation.get('should_evolve', False):
-                print("\n--- [MetaAgent] Triggering Intra-task Self-Evolution ---")
-                await self.evolution_engine.evolve_from_single_task(
+        learnings = None
+        if is_learning_task:
+            learnings = self._extract_learnings(result.get("output", ""))
+            if allow_evolution and learnings:
+                print("\n--- [MetaAgent] Triggering Post-Hoc Self-Evolution from Learning ---")
+                await self.evolution_engine.evolve_from_correction(
                     task_analysis,
-                    result,
-                    evaluation
+                    learnings['root_cause'],
+                    learnings['abstract_takeaways']
                 )
 
-            # if self.task_counter % 5 == 0:
-            #     print("\n--- [MetaAgent] Triggering Inter-task (Experience-based) Self-Evolution ---")
-            #     await self.evolution_engine.evolve_from_experience_store()
+        print("\n--- [MetaAgent] Updating Experience Hub ---")
+        # 无论成功失败都更新经验，学习任务提供了宝贵的失败教训
+        self.experience_hub.add_experience(task_analysis, result, evaluation, learnings)
 
         return result
 
+    def _extract_learnings(self, text: str) -> Optional[Dict[str, Any]]:
+        """从学习任务的输出中解析出结构化的学习成果。"""
+        try:
+            root_cause_match = re.search(
+                r"### Root Cause Analysis of the Error\s*(.*?)\s*### Abstract Takeaways and Lessons Learned", text,
+                re.DOTALL)
+            takeaways_match = re.search(
+                r"### Abstract Takeaways and Lessons Learned\s*(.*?)\s*### Corrected Solution Implementation", text,
+                re.DOTALL)
+
+            if root_cause_match and takeaways_match:
+                return {
+                    "root_cause": root_cause_match.group(1).strip(),
+                    "abstract_takeaways": takeaways_match.group(1).strip().split('\n')
+                }
+        except Exception as e:
+            print(f"解析学习内容时出错: {e}")
+        return None
+
     async def _analyze_task(self, task_description: str) -> Dict[str, Any]:
-        prompt = load_prompt_template("task_analysis").format(
-            task_description=task_description
-        )
+        if "### Root Cause Analysis" in task_description:
+            # 这是一个学习任务，我们可以从中提取原始问题类型
+            original_question_match = re.search(r"- \*\*Original Problem:\*\*\s*(.*?)\s*- \*\*Your Incorrect Solution",
+                                                task_description, re.DOTALL)
+            if original_question_match:
+                task_description = original_question_match.group(1).strip()
+
+        prompt = load_prompt_template("task_analysis").format(task_description=task_description)
         parsed_json = await self._generate_structured_json(prompt)
 
         if parsed_json:
@@ -114,7 +155,7 @@ class MetaAgent(Agent):
             "suggested_approach": "general problem solving"
         }
 
-    async def _determine_required_agents(self, task_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _determine_required_agents(self, task_analysis: Dict[str, Any], experience: Optional[Dict] = None) -> List[Dict[str, Any]]:
         # task_type = task_analysis.get("task_type", "").lower()
         # complexity = task_analysis.get("complexity", "")
 
@@ -139,7 +180,8 @@ class MetaAgent(Agent):
         #     ]
 
         prompt = load_prompt_template("determine_agents").format(
-            task_analysis=json.dumps(task_analysis, indent=2)
+            task_analysis=json.dumps(task_analysis, indent=2),
+            experience=json.dumps(experience, indent=2) if experience else "None"
         )
         parsed_json = await self._generate_structured_json(prompt)
         if parsed_json:
@@ -153,9 +195,10 @@ class MetaAgent(Agent):
         ]
 
     async def _design_collaboration(self,
-                                    task_analysis: Dict[str, Any],
-                                    agents: List[Agent]) -> Dict[str, Any]:
-        agent_info = [{"name": agent.name, "role": agent.role, "type": agent.type} for agent in agents]
+                                    task_analysis: Dict,
+                                    agents: List,
+                                    experience: Optional[Dict] = None) -> Dict:
+        agent_info = [{"name": agent.name, "role": agent.role} for agent in agents]
 
         '''# If there's no planner, the first agent should directly execute.
         has_planner = any(a.type == 'planner' for a in agents)
@@ -169,7 +212,8 @@ class MetaAgent(Agent):
 
         prompt = load_prompt_template("design_collaboration").format(
             task_analysis=json.dumps(task_analysis, indent=2),
-            agents=json.dumps(agent_info, indent=2)
+            agents=json.dumps(agent_info, indent=2),
+            experience=json.dumps(experience, indent=2) if experience else "None"
         )
 
         parsed_json = await self._generate_structured_json(prompt)
@@ -189,35 +233,31 @@ class MetaAgent(Agent):
     async def _evaluate_result(self,
                                result: Dict[str, Any],
                                task_description: str) -> Dict[str, Any]:
-        """评估任务结果"""
-        prompt = load_prompt_template("evaluate_result").format(
-            task_description=task_description,
-            result=json.dumps(result, indent=2, default=str)
-        )
-        # MODIFIED: Use the new internal generator
-        parsed_json = await self._generate_structured_json(prompt)
-        if parsed_json and isinstance(parsed_json, dict):
-            evaluation = parsed_json
-            evaluation["should_evolve"] = evaluation.get("score", 0) < 0.7
-            return evaluation
-        print("警告: 结果评估未能解析JSON，使用默认值。")
-        return {
-            "score": 0.5, "strengths": [],
-            "weaknesses": ["Evaluation response was not valid JSON."],
-            "should_evolve": True
-        }
+        # 简化评估，因为核心学习现在由答案对比驱动
+        # 我们可以假设，如果触发了学习任务，那么之前的尝试就是失败的
+        if "### Root Cause Analysis" in task_description:
+            return {"score": 0.2, "weaknesses": ["Previous attempt was incorrect, triggering a learning cycle."],
+                    "should_evolve": True}
+        else:
+            # 在这个新流程中，我们无法仅通过输出来判断对错，这个判断移到了aime.py中
+            # 所以这里的评估只做基本检查
+            if result.get("output") and "error" not in result["output"].lower():
+                return {"score": 0.9, "strengths": ["Completed without system errors."], "should_evolve": False}
+            else:
+                return {"score": 0.1, "weaknesses": ["Task execution resulted in an error or no output."],
+                        "should_evolve": True}
 
-    async def _update_experience(self,
-                                 task_analysis: Dict[str, Any],
-                                 agents: List[Agent],
-                                 result: Dict[str, Any],
-                                 evaluation: Dict[str, Any]) -> None:
-        """更新经验库"""
-        agent_specs = [{"name": a.name, "type": a.type, "system_prompt": a.system_prompt} for a in agents]
-        experience = {
-            "task_analysis": task_analysis,
-            "agents_used": agent_specs,
-            "result_trajectory": result,
-            "evaluation": evaluation
-        }
-        await self.experience_store.store_experience(experience)
+    # async def _update_experience(self,
+    #                              task_analysis: Dict[str, Any],
+    #                              agents: List[Agent],
+    #                              result: Dict[str, Any],
+    #                              evaluation: Dict[str, Any]) -> None:
+    #     """更新经验库"""
+    #     agent_specs = [{"name": a.name, "type": a.type, "system_prompt": a.system_prompt} for a in agents]
+    #     experience = {
+    #         "task_analysis": task_analysis,
+    #         "agents_used": agent_specs,
+    #         "result_trajectory": result,
+    #         "evaluation": evaluation
+    #     }
+    #     await self.experience_store.store_experience(experience)

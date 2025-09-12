@@ -1,15 +1,11 @@
+# evolving_multi_agent/memory/experience_hub.py
 import networkx as nx
 import json
 import os
-from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 
 class ExperienceHub:
-    """
-    记忆模块，以图的形式存储和检索经验。
-    这有助于MetaAgent从过去的任务中学习，以提高未来的表现。
-    """
     def __init__(self, db_path="memory/experience_graph.json"):
         self.db_path = db_path
         self.graph = nx.DiGraph()
@@ -18,7 +14,7 @@ class ExperienceHub:
     def _load_graph(self):
         """从文件加载经验图。"""
         if os.path.exists(self.db_path):
-            with open(self.db_path, 'r') as f:
+            with open(self.db_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.graph = nx.node_link_graph(data)
         else:
@@ -28,73 +24,83 @@ class ExperienceHub:
         """将经验图保存到文件。"""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         data = nx.node_link_data(self.graph)
-        with open(self.db_path, 'w') as f:
-            json.dump(data, f, indent=2)
+        with open(self.db_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def add_experience(self, task_analysis: Dict[str, Any], result: Dict[str, Any], evaluation: Dict[str, Any]):
-        """
-        处理一个已完成的任务，并将学到的知识存储在图中。
-        它会抽象出成功的模式，而不仅仅是记录步骤。
-        """
-        if evaluation.get("score", 0) < 0.8:
-            # 目前，我们只从成功的任务中学习，以确保知识的质量。
-            return
+    def add_experience(self, task_analysis: Dict, result: Dict, evaluation: Dict, learnings: Optional[Dict] = None):
+        """存储经验，优先存储从学习中提取的抽象启发式策略。"""
+        problem_type = task_analysis.get('task_type', 'generic')
+        concepts = task_analysis.get('knowledge_domains', [])
 
-        # 1. 创建/更新问题类型节点
-        problem_type_id = f"problem_{task_analysis.get('task_type', 'generic')}"
-        self.graph.add_node(problem_type_id, type='problem_type',
-                            access_count=self.graph.nodes.get(problem_type_id, {}).get('access_count', 0) + 1)
+        # 存储从失败中学习到的抽象教训
+        if learnings and learnings.get('abstract_takeaways'):
+            for takeaway in learnings['abstract_takeaways']:
+                if not takeaway.strip(): continue
+                heuristic_id = f"heuristic_{hash(takeaway)}"
+                if not self.graph.has_node(heuristic_id):
+                    self.graph.add_node(heuristic_id, type='heuristic', text=takeaway, positive_count=0,
+                                        negative_count=1)
+                else:
+                    self.graph.nodes[heuristic_id]['negative_count'] += 1
 
-        # 2. 创建/更新概念节点
-        for concept in task_analysis.get('knowledge_domains', []):
-            concept_id = f"concept_{concept.lower().replace(' ', '_')}"
-            self.graph.add_node(concept_id, type='concept', label=concept)
-            self.graph.add_edge(problem_type_id, concept_id, type='USES_CONCEPT')
+                # 将启发式策略关联到问题类型和概念
+                self.graph.add_edge(f"problem_{problem_type}", heuristic_id)
+                for concept in concepts:
+                    self.graph.add_edge(f"concept_{concept}", heuristic_id)
+            print(f"  [记忆模块] 从失败中学习并存储了 {len(learnings['abstract_takeaways'])} 条启发式教训。")
 
-        # 3. 抽象并存储成功的协作模式
-        try:
-            plan = result['context']['collaboration_plan']
-            pattern_id = f"pattern_{hash(json.dumps(plan, sort_keys=True))}"
-
-            if not self.graph.has_node(pattern_id):
-                self.graph.add_node(pattern_id, type='pattern', plan=plan, success_count=1,
-                                    last_used=datetime.utcnow().isoformat())
-            else:
-                self.graph.nodes[pattern_id]['success_count'] += 1
-                self.graph.nodes[pattern_id]['last_used'] = datetime.utcnow().isoformat()
-
-            self.graph.add_edge(problem_type_id, pattern_id, type='SOLVED_BY')
-        except KeyError:
-            print("警告: 在结果上下文中找不到协作计划，无法抽象模式。")
+        # 如果任务成功，将成功的计划与相关启发式策略关联起来
+        elif evaluation.get('score', 0) >= 0.8:
+            plan = result.get('context', {}).get('collaboration_plan')
+            if plan:
+                pattern_id = f"pattern_{hash(json.dumps(plan, sort_keys=True))}"
+                self.graph.add_node(pattern_id, type='successful_pattern', plan=plan)
+                self.graph.add_edge(f"problem_{problem_type}", pattern_id)
+                # 将这个成功模式与该问题类型已知的所有启发式策略关联
+                # 表示这个模式符合这些好的实践
+                for heuristic_id in self.retrieve_relevant_heuristics(task_analysis):
+                    self.graph.add_edge(heuristic_id, pattern_id)
+                    self.graph.nodes[heuristic_id]['positive_count'] += 1
+            print(f"  [记忆模块] 存储了1条成功的协作模式。")
 
         self._save_graph()
-        print(f"  [记忆模块] 已为任务类型 '{problem_type_id}' 添加成功经验。")
 
-    def retrieve_relevant_experience(self, task_analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        为一个新任务检索最相关的历史经验。
-        它优先考虑成功的协作模式。
-        """
-        problem_type_id = f"problem_{task_analysis.get('task_type', 'generic')}"
-        if not self.graph.has_node(problem_type_id):
-            return None
+    def retrieve_relevant_heuristics(self, task_analysis: Dict) -> List[str]:
+        """根据任务类型和概念，检索最相关的启发式策略文本。"""
+        problem_type = task_analysis.get('task_type', 'generic')
+        concepts = task_analysis.get('knowledge_domains', [])
 
-        candidate_patterns = []
-        for successor in self.graph.successors(problem_type_id):
-            if self.graph.nodes[successor].get('type') == 'pattern':
-                pattern_node = self.graph.nodes[successor]
-                candidate_patterns.append({
-                    'plan': pattern_node.get('plan'),
-                    'success_count': pattern_node.get('success_count', 1)
-                })
+        relevant_heuristic_ids = set()
 
-        if not candidate_patterns:
-            return None
+        # 从问题类型查找
+        source_nodes = [f"problem_{problem_type}"] + [f"concept_{c}" for c in concepts]
 
-        best_pattern = max(candidate_patterns, key=lambda p: p['success_count'])
+        for node in source_nodes:
+            if self.graph.has_node(node):
+                for successor in self.graph.successors(node):
+                    if self.graph.nodes[successor].get('type') == 'heuristic':
+                        relevant_heuristic_ids.add(successor)
 
-        print(f"  [记忆模块] 检索到相关经验：发现一个有 {best_pattern['success_count']} 次成功记录的模式。")
+        # 排序：优先选择正面案例多、负面案例少的启发式策略
+        sorted_heuristics = sorted(
+            list(relevant_heuristic_ids),
+            key=lambda hid: self.graph.nodes[hid].get('positive_count', 0) - self.graph.nodes[hid].get('negative_count',
+                                                                                                       0),
+            reverse=True
+        )
+
+        return [self.graph.nodes[hid]['text'] for hid in sorted_heuristics]
+
+    def retrieve_relevant_experience(self, task_analysis: Dict) -> Dict:
+        """检索相关的启发式策略和成功的协作模式。"""
+        heuristics = self.retrieve_relevant_heuristics(task_analysis)
+
+        # (可选) 未来可加入检索与这些启发式策略相关的成功模式
+
+        if heuristics:
+            print(f"  [记忆模块] 检索到 {len(heuristics)} 条相关的解题原则/启发式策略。")
 
         return {
-            "suggested_plan": best_pattern['plan']
+            "retrieved_heuristics": heuristics,
+            "successful_patterns": []  # 简化：目前主要依赖启发式策略
         }

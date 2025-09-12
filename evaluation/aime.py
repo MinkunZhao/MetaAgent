@@ -1,7 +1,6 @@
 # evaluation/aime.py
 import json
 import os
-import asyncio
 import re
 from typing import Dict, Any, List
 from core.meta_agent import MetaAgent
@@ -76,7 +75,6 @@ class AimeRunner:
         results = []
         for i, problem in enumerate(problems):
             print(f"Processing problem {i + 1}/{len(problems)}: {problem['question'][:50]}...")
-            # MODIFIED: Pass the allow_evolution flag down to the problem evaluation
             result = await self._evaluate_problem(problem, allow_evolution=allow_evolution)
             results.append(result)
 
@@ -96,60 +94,38 @@ class AimeRunner:
         }
 
     async def _evaluate_problem(self, problem: Dict[str, Any], allow_evolution: bool) -> Dict[str, Any]:
-        """
-        评估单个问题。
-        现在接受 allow_evolution 参数，以控制在处理任务时是否启用进化。
-        """
+        """评估单个问题，并在失败时触发学习循环。"""
         initial_task = f"Please solve the following advanced math problem from the AIME 2025 dataset. Provide a detailed, step-by-step reasoning and enclose your final answer in \\boxed{{...}}.\n\nQuestion: {problem['question']}"
-
         correct_answer = problem.get('answer', '')
-        max_attempts = 5
+        max_attempts = 2  # 首次尝试 + 1次学习后尝试
         current_attempt = 0
         passed = False
         generated_text = ""
         generated_answer = ""
+        task = initial_task
 
         while not passed and current_attempt < max_attempts:
             current_attempt += 1
             print(f"    Attempt {current_attempt}/{max_attempts}...")
-            task = initial_task
-            if current_attempt > 1:
-                # 后续的自我修正尝试
-                reflection_prompt = f"""You are in a self-correction loop. You previously failed to solve a math problem correctly. Your task is to analyze your mistake, create a new plan, and execute it to find the correct answer.
 
-**Problem Context:**
-- **Original Problem:** {problem['question']}
-- **Your Previous Incorrect Answer:** '{generated_answer}'
-- **Your Previous Incorrect Solution:** 
----
-{generated_text}
----
-- **The Correct Final Answer is:** {correct_answer}
-- **The Correct Step-by-Step Solution is:**
----
-{problem.get('solution', 'No solution provided.')}
----
-
-**Your New Task:**
-You MUST provide your response in the following structured format, using the exact headings provided.
-
-### Root Cause Analysis of the Error
-In this section, precisely explain why the previous solution was incorrect. Pinpoint the specific logical flaw, miscalculation, or misunderstanding. Be concise and clear.
-
-### New Solution Plan
-Based on your analysis and the provided correct solution, create a new, step-by-step plan. This plan should be a high-level outline of the correct logical path to the solution.
-
-### Corrected Solution Implementation
-Execute the plan you just outlined. Provide the full, detailed, step-by-step mathematical reasoning. Show all your work clearly.
-Finally, ensure your implementation concludes with the final answer enclosed in `\\boxed{{...}}`.
-"""
-                task = reflection_prompt
-
-            # MODIFIED: The allow_evolution flag is now passed to the MetaAgent
-            result_obj = await self.meta_agent.handle_task(task, allow_evolution=allow_evolution)
+            # 只有在学习后才触发进化
+            should_evolve_this_turn = allow_evolution and (current_attempt > 1)
+            result_obj = await self.meta_agent.handle_task(task, allow_evolution=should_evolve_this_turn)
             generated_text = result_obj.get("output", "")
-            generated_answer = self._extract_final_answer(generated_text)
+
+            # 如果是学习任务的输出，我们需要分离出答案和学习内容
+            if "### Corrected Solution Implementation" in generated_text:
+                solution_part = generated_text.split("### Corrected Solution Implementation")[1]
+                generated_answer = self._extract_final_answer(solution_part)
+            else:
+                generated_answer = self._extract_final_answer(generated_text)
+
             passed = str(generated_answer) == str(correct_answer)
+
+            if not passed and current_attempt < max_attempts:
+                print("    Attempt failed. Triggering learning from solution...")
+                # 构建学习任务
+                task = self._create_learning_task(problem, generated_text)
 
         return {
             "question": problem['question'],
@@ -159,6 +135,35 @@ Finally, ensure your implementation concludes with the final answer enclosed in 
             "passed": passed,
             "attempts": current_attempt
         }
+
+    def _create_learning_task(self, problem: Dict[str, Any], incorrect_solution: str) -> str:
+            """创建一个特殊的任务，要求MetaAgent从错误中学习。"""
+            return f"""You are in a self-correction and learning loop. You previously failed to solve a math problem. Your new task is to deeply analyze your mistake by comparing it to the correct solution, extract abstract lessons, and then provide a corrected solution.
+
+    **Problem Context:**
+    - **Original Problem:** {problem['question']}
+    - **Your Incorrect Solution:** 
+    ---
+    {incorrect_solution}
+    ---
+    - **The Correct Step-by-Step Solution is:**
+    ---
+    {problem.get('solution', 'No detailed solution provided.')}
+    ---
+
+    **Your New Task:**
+    You MUST provide your response in the following structured format, using the exact headings provided.
+
+    ### Root Cause Analysis of the Error
+    In this section, precisely explain WHY the previous solution was incorrect. Pinpoint the specific logical flaw, miscalculation, or misunderstanding by comparing your work to the correct solution.
+
+    ### Abstract Takeaways and Lessons Learned
+    This is the most critical part. Based on your analysis, formulate general, reusable principles or heuristics. Do not just restate the error. Instead, abstract the lesson. For example, instead of "I forgot to check b > 9", a good takeaway would be "For base-N problems, always explicitly list and verify all constraints on the base (e.g., N > largest digit) at the beginning of the solution."
+
+    ### Corrected Solution Implementation
+    Execute a new, correct solution from scratch, applying the lessons you just learned. Provide the full, detailed, step-by-step mathematical reasoning. Show all your work clearly.
+    Finally, ensure your implementation concludes with the final answer enclosed in `\\boxed{{...}}`.
+    """
 
     def _compute_statistics(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """计算评估统计信息"""
