@@ -60,7 +60,7 @@ AVAILABLE AGENTS: {agents}
 
 Create a step-by-step collaboration plan. Your plan should be logical, starting with planning and moving to execution. You DO NOT need to add a 'review' step, as the system will trigger it automatically if an agent's confidence is low.
 
-CRITICAL: Return your response as a single, valid JSON object.
+CRITICAL: Your response must be a single, valid JSON object. Do not add any text before or after the JSON.
 The JSON object must have these keys:
 - steps: An array of steps, each with:
   - agent: The name of the agent responsible.

@@ -16,7 +16,6 @@ class AgentFactory:
     """
     Agent工厂，负责创建不同类型的Agent
     """
-
     def __init__(self, config: Dict[str, Any]):
         """初始化Agent工厂"""
         self.config = config
@@ -38,18 +37,18 @@ class AgentFactory:
                 "executor": {
                     "system_prompt": "You are an Execution Agent responsible for implementing solutions based on plans."
                 },
-                "reviewer": {
-                    "system_prompt": "You are a Review Agent responsible for critically analyzing solutions for correctness and quality."
-                },
-                "code_generator": {
-                    "system_prompt": "You are a Code Generation Agent specialized in writing clean, efficient, and correct code."
-                },
+                # "reviewer": {
+                #     "system_prompt": "You are a Review Agent responsible for critically analyzing solutions for correctness and quality."
+                # },
+                # "code_generator": {
+                #     "system_prompt": "You are a Code Generation Agent specialized in writing clean, efficient, and correct code."
+                # },
                 # "code_reviewer": {
                 #     "system_prompt": "You are a Code Review Agent specialized in identifying bugs, inefficiencies, and style issues in code."
                 # },
-                "test_writer": {
-                    "system_prompt": "You are a Test Writing Agent specialized in creating comprehensive test cases for code."
-                }
+                # "test_writer": {
+                #     "system_prompt": "You are a Test Writing Agent specialized in creating comprehensive test cases for code."
+                # }
             }
 
     async def create_agents(self, agent_specs: List[Dict[str, Any]]) -> List[Agent]:

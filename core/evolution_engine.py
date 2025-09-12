@@ -13,7 +13,6 @@ class EvolutionEngine:
     """
     自我进化引擎，负责改进Agent模板和协作流程
     """
-
     def __init__(self, config: Dict[str, Any], agent_factory: AgentFactory):
         """初始化进化引擎"""
         self.config = config

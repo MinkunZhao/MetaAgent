@@ -60,20 +60,24 @@ class AimeRunner:
             return problems[:num_problems]
         return problems
 
-    async def run_testing_phase(self, num_problems: int = None) -> Dict[str, Any]:
+    async def run_evaluation(self, num_problems: int = None, allow_evolution: bool = False) -> Dict[str, Any]:
         """
-        运行测试阶段。
-        使用 AIME 数据集来评估进化后的 MetaAgent 的性能。
+        运行评估阶段。
+        如果 allow_evolution 为 True，则在处理每个问题后都会触发潜在的自我进化。
+        如果为 False，则仅进行测试而不进化智能体。
         """
-        print("--- [AIME 2025] Starting Testing Phase ---")
-        test_problems = self._load_problems(num_problems)
-        if not test_problems:
+        phase_name = "Evolutionary Evaluation" if allow_evolution else "Testing"
+        print(f"--- [AIME 2025] Starting {phase_name} Phase ---")
+
+        problems = self._load_problems(num_problems)
+        if not problems:
             return {}
 
         results = []
-        for i, problem in enumerate(test_problems):
-            print(f"Testing on problem {i + 1}/{len(test_problems)}: {problem['question'][:50]}...")
-            result = await self._evaluate_problem(problem, allow_evolution=False)
+        for i, problem in enumerate(problems):
+            print(f"Processing problem {i + 1}/{len(problems)}: {problem['question'][:50]}...")
+            # MODIFIED: Pass the allow_evolution flag down to the problem evaluation
+            result = await self._evaluate_problem(problem, allow_evolution=allow_evolution)
             results.append(result)
 
             passed_str = "PASS" if result["passed"] else "FAIL"
@@ -82,17 +86,20 @@ class AimeRunner:
             print(f"    Correct:   {result['correct_answer'][:80]}...")
 
         stats = self._compute_statistics(results)
-        print("--- [AIME 2025] Testing Phase Completed ---\n")
+        print(f"--- [AIME 2025] {phase_name} Phase Completed ---\n")
 
         return {
             "results": results,
             "accuracy": stats["accuracy"],
-            "total_problems": len(test_problems),
+            "total_problems": len(problems),
             "passed_problems": stats["passed_count"]
         }
 
     async def _evaluate_problem(self, problem: Dict[str, Any], allow_evolution: bool) -> Dict[str, Any]:
-        """评估单个问题，并在失败时进行自我修正循环。"""
+        """
+        评估单个问题。
+        现在接受 allow_evolution 参数，以控制在处理任务时是否启用进化。
+        """
         initial_task = f"Please solve the following advanced math problem from the AIME 2025 dataset. Provide a detailed, step-by-step reasoning and enclose your final answer in \\boxed{{...}}.\n\nQuestion: {problem['question']}"
 
         correct_answer = problem.get('answer', '')
@@ -105,11 +112,8 @@ class AimeRunner:
         while not passed and current_attempt < max_attempts:
             current_attempt += 1
             print(f"    Attempt {current_attempt}/{max_attempts}...")
-
-            if current_attempt == 1:
-                # 第一次尝试
-                task = initial_task
-            else:
+            task = initial_task
+            if current_attempt > 1:
                 # 后续的自我修正尝试
                 reflection_prompt = f"""You are in a self-correction loop. You previously failed to solve a math problem correctly. Your task is to analyze your mistake, create a new plan, and execute it to find the correct answer.
 
@@ -141,6 +145,7 @@ Finally, ensure your implementation concludes with the final answer enclosed in 
 """
                 task = reflection_prompt
 
+            # MODIFIED: The allow_evolution flag is now passed to the MetaAgent
             result_obj = await self.meta_agent.handle_task(task, allow_evolution=allow_evolution)
             generated_text = result_obj.get("output", "")
             generated_answer = self._extract_final_answer(generated_text)

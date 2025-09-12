@@ -16,9 +16,7 @@ class MetaAgent(Agent):
     """
     Meta Agent负责生成和协调其他Agent来完成任务，并具有自我进化能力
     """
-
     def __init__(self, config: Dict[str, Any]):
-        """初始化Meta Agent"""
         super().__init__(
             name="MetaAgent",
             system_prompt=load_prompt_template("meta_agent_system"),
@@ -32,7 +30,6 @@ class MetaAgent(Agent):
         # self.experience_store = ExperienceStore()
         self.task_counter = 0
 
-    # NEW METHOD: A dedicated internal generator for structured JSON output
     async def _generate_structured_json(self, prompt: str) -> Any:
         """
         一个专用于生成纯JSON输出的内部方法，不触发自我评估。
@@ -41,14 +38,11 @@ class MetaAgent(Agent):
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": prompt}
         ]
-        # Directly call the api_manager for a clean response
+
         response_text = await self.api_manager.generate_chat_completion(messages)
         return extract_and_parse_json(response_text)
 
     async def handle_task(self, task_description: str, allow_evolution: bool = True) -> Dict[str, Any]:
-        """
-        处理用户任务
-        """
         self.task_counter += 1
 
         print("\n--- [MetaAgent] Analyzing Task ---")
@@ -95,7 +89,6 @@ class MetaAgent(Agent):
         return result
 
     async def _analyze_task(self, task_description: str) -> Dict[str, Any]:
-        """分析任务"""
         prompt = load_prompt_template("task_analysis").format(
             task_description=task_description
         )
@@ -105,17 +98,16 @@ class MetaAgent(Agent):
             return parsed_json
 
         print("警告: 任务分析未能解析JSON，使用智能回退机制。")
-        # 更智能的回退
-        desc_lower = task_description.lower()
-        math_keywords = ["math", "aime", "geometry", "algebra", "combinatorics", "number theory", "calculate",
-                         "find the value"]
-        if any(keyword in desc_lower for keyword in math_keywords):
-            print("  检测到数学相关关键词，回退到高复杂度数学任务类型。")
-            return {
-                "task_type": "high_complexity_math", "complexity": "high",
-                "key_requirements": ["solve the math problem accurately", "provide step-by-step reasoning"],
-                "suggested_approach": "Use specialized math agents and review the solution."
-            }
+        # desc_lower = task_description.lower()
+        # math_keywords = ["math", "aime", "geometry", "algebra", "combinatorics", "number theory", "calculate",
+        #                  "find the value"]
+        # if any(keyword in desc_lower for keyword in math_keywords):
+        #     print("  检测到数学相关关键词，回退到高复杂度数学任务类型。")
+        #     return {
+        #         "task_type": "high_complexity_math", "complexity": "high",
+        #         "key_requirements": ["solve the math problem accurately", "provide step-by-step reasoning"],
+        #         "suggested_approach": "Use specialized math agents and review the solution."
+        #     }
         return {
             "task_type": "unknown", "complexity": "medium",
             "key_requirements": ["complete the task"],
@@ -123,31 +115,28 @@ class MetaAgent(Agent):
         }
 
     async def _determine_required_agents(self, task_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """根据任务分析确定需要哪些Agent"""
-        task_type = task_analysis.get("task_type", "").lower()
-        complexity = task_analysis.get("complexity", "")
+        # task_type = task_analysis.get("task_type", "").lower()
+        # complexity = task_analysis.get("complexity", "")
 
-        # MODIFIED: More robust check for math-related tasks
-        math_related_keywords = ["math", "combinatorics", "geometry", "algebra"]
-        is_math_task = any(keyword in task_type for keyword in math_related_keywords)
-
-        if is_math_task and complexity == "high":
-            print("检测到高难度数学任务，使用专门的hard_math_agent和math_reviewer。")
-            return [
-                {
-                    "type": "hard_math_agent",
-                    "name": "HardMathSolverAgent",
-                    "role": "Execute the plan to solve the complex math problem",
-                    "custom_prompt": self.agent_factory.agent_templates.get("hard_math_agent", {}).get("system_prompt")
-                },
-                {
-                    # MODIFIED: Use the correct math_reviewer
-                    "type": "math_reviewer",
-                    "name": "MathReviewerAgent",
-                    "role": "Review the mathematical solution and final answer for correctness",
-                    "custom_prompt": self.agent_factory.agent_templates.get("math_reviewer", {}).get("system_prompt")
-                }
-            ]
+        # math_related_keywords = ["math", "combinatorics", "geometry", "algebra"]
+        # is_math_task = any(keyword in task_type for keyword in math_related_keywords)
+        #
+        # if is_math_task and complexity == "high":
+        #     print("检测到高难度数学任务，使用专门的hard_math_agent和math_reviewer。")
+        #     return [
+        #         {
+        #             "type": "hard_math_agent",
+        #             "name": "HardMathSolverAgent",
+        #             "role": "Execute the plan to solve the complex math problem",
+        #             "custom_prompt": self.agent_factory.agent_templates.get("hard_math_agent", {}).get("system_prompt")
+        #         },
+        #         {
+        #             "type": "math_reviewer",
+        #             "name": "MathReviewerAgent",
+        #             "role": "Review the mathematical solution and final answer for correctness",
+        #             "custom_prompt": self.agent_factory.agent_templates.get("math_reviewer", {}).get("system_prompt")
+        #         }
+        #     ]
 
         prompt = load_prompt_template("determine_agents").format(
             task_analysis=json.dumps(task_analysis, indent=2)
@@ -166,10 +155,9 @@ class MetaAgent(Agent):
     async def _design_collaboration(self,
                                     task_analysis: Dict[str, Any],
                                     agents: List[Agent]) -> Dict[str, Any]:
-        """设计协作流程"""
         agent_info = [{"name": agent.name, "role": agent.role, "type": agent.type} for agent in agents]
 
-        # If there's no planner, the first agent should directly execute.
+        '''# If there's no planner, the first agent should directly execute.
         has_planner = any(a.type == 'planner' for a in agents)
         is_math_task = "math" in task_analysis.get("task_type", "")
 
@@ -177,13 +165,13 @@ class MetaAgent(Agent):
         if not has_planner or is_math_task:
             executor = next((a.name for a in agents if a.type in ['hard_math_agent', 'executor']), agents[0].name)
             return {"steps": [{"agent": executor, "action": "execute", "input": "task_description"}],
-                    "final_output": "last_output"}
+                    "final_output": "last_output"}'''
 
         prompt = load_prompt_template("design_collaboration").format(
             task_analysis=json.dumps(task_analysis, indent=2),
             agents=json.dumps(agent_info, indent=2)
         )
-        # MODIFIED: Use the new internal generator
+
         parsed_json = await self._generate_structured_json(prompt)
         if parsed_json:
             return parsed_json

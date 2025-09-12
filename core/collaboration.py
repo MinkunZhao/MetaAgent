@@ -15,9 +15,6 @@ class CollaborationManager():
                            plan: Dict[str, Any],
                            agents: List[Agent],
                            task_description: str) -> Dict[str, Any]:
-        """
-        执行协作计划，并根据置信度动态触发修正。
-        """
         context = {
             "task_description": task_description,
             "agents": {agent.name: agent for agent in agents}
